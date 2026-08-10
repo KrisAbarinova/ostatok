@@ -1,0 +1,23 @@
+# Секреты — никогда в git
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+service-role*.txt
+
+# Supabase CLI
+.supabase/
+supabase/.temp/
+supabase/.branches/
+
+# Зависимости и сборка
+node_modules/
+dist/
+build/
+
+# Системное
+.DS_Store
+Thumbs.db
+*.log
