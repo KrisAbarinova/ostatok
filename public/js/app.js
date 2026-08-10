@@ -26,6 +26,7 @@ const iso = x => x.getFullYear() + '-' + pad(x.getMonth() + 1) + '-' + pad(x.get
 const addDays = (x, n) => new Date(x.getFullYear(), x.getMonth(), x.getDate() + n);
 const utc = x => Date.UTC(x.getFullYear(), x.getMonth(), x.getDate());
 const dCount = (a, b) => Math.round((utc(d(b)) - utc(d(a))) / 864e5) + 1;
+const dayLabel = k => { const dt = d(k); return `${dt.getDate()} ${MON[dt.getMonth()]}`; };
 
 /* ---- состояние ---- */
 const S = {
@@ -35,6 +36,7 @@ const S = {
   spend: {},           // дата -> [{id, d, s, raw}] активного периода
   cache: {},           // period_id -> такая же карта
   today: API.localToday(),
+  viewDate: API.localToday(), // какой день сейчас открыт на экране «Сегодня»
   // черновик онбординга и экрана настроек
   income: 0,
   mandatory: [],
@@ -116,6 +118,7 @@ document.addEventListener('click', e => {
   if (!t) return;
   const dest = resolveDest(t.dataset.go);
   if (dest === 'month' && t.classList.contains('navb')) viewIdx = 0;
+  if (dest === 'today' && t.classList.contains('navb')) S.viewDate = S.today;
   go(dest);
 });
 
@@ -165,9 +168,82 @@ function checkDates() {
   $('#dateErr').classList.toggle('on', bad);
   $('#s1Go').disabled = bad;
   if (!bad) { S.start = a; S.end = b; $('#daysOut').textContent = pDays(); }
+  renderPeriodBtn();
   return !bad;
 }
-['pStart', 'pEnd'].forEach(id => $('#' + id).addEventListener('change', checkDates));
+function renderPeriodBtn() {
+  const a = $('#pStart').value, b = $('#pEnd').value;
+  $('#periodBtnText').textContent = (a && b)
+    ? `${d(a).getDate()} ${MS[d(a).getMonth()]} — ${d(b).getDate()} ${MS[d(b).getMonth()]}`
+    : 'Выбрать даты';
+}
+
+/* ---- выбор периода одним календарём (как при выборе дат для поездки) ---- */
+let rcView = null, pickA = null, pickB = null;
+
+function openRangeCal() {
+  pickA = $('#pStart').value || null;
+  pickB = $('#pEnd').value || null;
+  const base = d(pickA || iso(new Date()));
+  rcView = new Date(base.getFullYear(), base.getMonth(), 1);
+  $('#rangeCal').style.display = 'block';
+  $('#periodBtn').setAttribute('aria-expanded', 'true');
+  $('#periodBtnIco').textContent = '▴';
+  renderRangeCal();
+}
+function closeRangeCal() {
+  $('#rangeCal').style.display = 'none';
+  $('#periodBtn').setAttribute('aria-expanded', 'false');
+  $('#periodBtnIco').textContent = '▾';
+}
+$('#periodBtn').addEventListener('click', () => {
+  if ($('#rangeCal').style.display === 'none') openRangeCal(); else closeRangeCal();
+});
+$('#rcPrev').addEventListener('click', () => {
+  rcView = new Date(rcView.getFullYear(), rcView.getMonth() - 1, 1); renderRangeCal();
+});
+$('#rcNext').addEventListener('click', () => {
+  rcView = new Date(rcView.getFullYear(), rcView.getMonth() + 1, 1); renderRangeCal();
+});
+
+function pickDay(k) {
+  if (!pickA || (pickA && pickB)) { pickA = k; pickB = null; }
+  else if (k < pickA) { pickA = k; pickB = null; }
+  else if (k > pickA) { pickB = k; }
+  renderRangeCal();
+  if (pickA && pickB) {
+    $('#pStart').value = pickA; $('#pEnd').value = pickB;
+    checkDates();
+    closeRangeCal();
+  }
+}
+
+function renderRangeCal() {
+  $('#rcMonth').textContent = `${MN[rcView.getMonth()]} ${rcView.getFullYear()}`;
+  $('#rcHint').textContent = !pickA ? 'Выберите первый день периода'
+    : !pickB ? 'Выберите последний день периода' : '';
+
+  const grid = $('#rcGrid'); grid.innerHTML = '';
+  ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'].forEach(x => {
+    const s = document.createElement('span'); s.className = 'dow'; s.textContent = x; grid.appendChild(s);
+  });
+  const first = new Date(rcView.getFullYear(), rcView.getMonth(), 1);
+  const last = new Date(rcView.getFullYear(), rcView.getMonth() + 1, 0);
+  for (let i = 0; i < (first.getDay() + 6) % 7; i++) grid.appendChild(document.createElement('span'));
+  for (let day = 1; day <= last.getDate(); day++) {
+    const dt = new Date(rcView.getFullYear(), rcView.getMonth(), day), k = iso(dt);
+    const s = document.createElement('span');
+    s.textContent = day;
+    s.setAttribute('role', 'button'); s.tabIndex = 0;
+    if (pickA && pickB && k > pickA && k < pickB) s.classList.add('rin');
+    if (pickA === k) s.classList.add('rs');
+    if (pickB === k) s.classList.add('re');
+    const pick = () => pickDay(k);
+    s.addEventListener('click', pick);
+    s.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+    grid.appendChild(s);
+  }
+}
 function renderS3() {
   $('#dailyOut').textContent = rub(calcDaily());
   $('#freeOut').textContent = rub(freeInc());
@@ -199,21 +275,33 @@ $('#startPeriod').addEventListener('click', async () => {
 /* ---- today ---- */
 function renderToday() {
   if (!S.period) return;
-  const k = S.today, dt = d(k), c = carry(k), avail = c + daily(), sp = spentOn(k), list = S.spend[k] || [];
-  $('#todayDate').textContent = `${dt.getDate()} ${MON[dt.getMonth()]}`;
+  const k = S.viewDate, c = carry(k), avail = c + daily(), sp = spentOn(k), list = S.spend[k] || [];
+  $('#todayDate').textContent = dayLabel(k);
   $('#dayNo').textContent = `Дн. ${dCount(S.period.start_date, k)}/${daysOf(S.period)}`;
   $('#availOut').textContent = rub(avail - sp);
   $('#carryOut').textContent = rub(c);
   $('#dailyOut2').textContent = rub(daily());
   $('#spentOut').textContent = rub(sp);
   $('#tmwOut').textContent = rub(avail - sp + daily());
+
+  const totalBudget = dailyOf(S.period) * daysOf(S.period);
+  const totalSpent = Object.values(S.spend).reduce((sum, dayList) => sum + dayList.reduce((a, t) => a + t.s, 0), 0);
+  $('#totalLeftOut').textContent = rub(totalBudget - totalSpent);
+
+  const atStart = d(k) <= d(S.period.start_date), atToday = d(k) >= d(S.today);
+  $('#dPrev').disabled = atStart; $('#dPrev').style.opacity = atStart ? .3 : 1;
+  $('#dNext').disabled = atToday; $('#dNext').style.opacity = atToday ? .3 : 1;
+
   $('#txnCount').textContent = list.length;
   const box = $('#txnList'); box.innerHTML = '';
   if (!list.length) { box.innerHTML = '<p class="p" style="padding:14px 0">Пока пусто. Добавьте первую трату.</p>'; }
   list.forEach(t => {
     const el = document.createElement('div'); el.className = 'txn';
     el.setAttribute('role', 'button'); el.tabIndex = 0; el.title = 'Нажмите, чтобы удалить';
-    el.innerHTML = `<div><p>${esc(t.d)}</p></div><b>${rub(t.s)}</b>`;
+    el.innerHTML = `<div><p>${esc(t.d)}</p></div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <b>${rub(t.s)}</b><span class="txn-x" aria-hidden="true">×</span>
+      </div>`;
     const del = async () => {
       if (!confirm(`Удалить «${t.d}» на ${rub(t.s)}?`)) return;
       try { await API.deleteTransaction(t.id); } catch (e) { toast(errText(e)); return; }
@@ -230,13 +318,29 @@ function renderToday() {
     box.appendChild(el);
   });
 }
+$('#dPrev').addEventListener('click', () => {
+  if (!S.period) return;
+  const prev = iso(addDays(d(S.viewDate), -1));
+  if (d(prev) < d(S.period.start_date)) return;
+  S.viewDate = prev; renderToday();
+});
+$('#dNext').addEventListener('click', () => {
+  if (!S.period) return;
+  const next = iso(addDays(d(S.viewDate), 1));
+  if (d(next) > d(S.today)) return;
+  S.viewDate = next; renderToday();
+});
 
 /* ---- add ---- */
 let amt = '';
-function resetAdd() { amt = ''; $('#desc').value = ''; paintAdd(); }
+function resetAdd() {
+  amt = ''; $('#desc').value = '';
+  $('#addTitle').textContent = S.viewDate === S.today ? 'Новая трата' : `Трата · ${dayLabel(S.viewDate)}`;
+  paintAdd();
+}
 function paintAdd() {
   const v = parseFloat(amt || '0') || 0;
-  const av = S.period ? carry(S.today) + daily() - spentOn(S.today) : 0;
+  const av = S.period ? carry(S.viewDate) + daily() - spentOn(S.viewDate) : 0;
   $('#amtOut').textContent = rub(v);
   $('#addHint').textContent = `Останется ${rub(av - v)} · завтра ${rub(av - v + daily())}`;
   $('#saveTxn').disabled = !(v > 0);
@@ -268,7 +372,7 @@ document.addEventListener('keydown', e => {
 });
 $('#saveTxn').addEventListener('click', async () => {
   const v = parseFloat(amt) || 0; if (!(v > 0)) return;
-  const k = S.today, raw = $('#desc').value.trim() || null;
+  const k = S.viewDate, raw = $('#desc').value.trim() || null;
   const btn = $('#saveTxn'); btn.disabled = true;
   let tx;
   try {
@@ -449,6 +553,7 @@ async function enterApp(period) {
   S.spend = buildSpend(r.transactions);
   S.cache[period.id] = S.spend;
   viewIdx = 0;
+  S.viewDate = S.today;
   fillSetup(period);
   go('today');
 }

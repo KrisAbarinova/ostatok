@@ -123,6 +123,8 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bor
 .txn p{margin:0;font-size:13.5px}
 .txn small{font:400 11px var(--mono);color:var(--fg3)}
 .txn b{font:400 13.5px var(--mono);font-weight:500}
+.txn-x{font:300 17px var(--mono);color:var(--fg3);flex:none;line-height:1}
+.txn:hover .txn-x{color:#E9836F}
 
 .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
 .cal span{aspect-ratio:1;display:grid;place-items:center;font:400 10px var(--mono);
@@ -134,6 +136,11 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bor
 .cal .l3{background:#6E6E78;color:#fff}
 .cal .now{box-shadow:inset 0 0 0 1.5px var(--fg);color:var(--fg)}
 .cal .fut{opacity:.25}
+.cal span[role=button]{cursor:pointer;transition:.14s}
+.cal span[role=button]:hover{background:var(--c2);color:var(--fg2)}
+.cal .rs,.cal .re{background:var(--fg);color:var(--bg)}
+.cal .rin{background:rgba(255,255,255,.1);color:var(--fg2)}
+.cal .rs:hover,.cal .re:hover{background:var(--fg);color:var(--bg)}
 
 .per{padding:15px 16px;border-radius:16px;background:var(--c1);border:1px solid var(--line);
   cursor:pointer;transition:.16s}
@@ -211,10 +218,27 @@ body.tg .foot{padding-bottom:calc(24px + env(safe-area-inset-bottom))}
   <div class="body">
     <p class="h">Период</p>
     <p class="p" style="margin-bottom:22px">Когда начинается и заканчивается текущий финансовый период.</p>
-    <label class="f" for="pStart">Начало</label>
-    <input type="date" id="pStart" value="2026-08-01">
-    <label class="f" for="pEnd" style="margin-top:16px">Конец</label>
-    <input type="date" id="pEnd" value="2026-08-31">
+    <label class="f" for="periodBtn">Период</label>
+    <button type="button" class="row act" id="periodBtn" aria-haspopup="true" aria-expanded="false"
+      style="width:100%;text-align:left;font-family:var(--ui);color:var(--fg)">
+      <span id="periodBtnText" class="mono">1 авг — 31 авг</span>
+      <span id="periodBtnIco" style="color:var(--fg3)">▾</span>
+    </button>
+    <input type="hidden" id="pStart" value="2026-08-01">
+    <input type="hidden" id="pEnd" value="2026-08-31">
+
+    <div id="rangeCal" style="display:none;margin-top:10px">
+      <div class="card" style="padding:14px 12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <button class="txt-btn" id="rcPrev" aria-label="Предыдущий месяц" style="padding:6px;min-height:32px;font-size:16px">‹</button>
+          <span id="rcMonth" style="font:500 13px var(--ui)">Август 2026</span>
+          <button class="txt-btn" id="rcNext" aria-label="Следующий месяц" style="padding:6px;min-height:32px;font-size:16px">›</button>
+        </div>
+        <div class="cal" id="rcGrid"></div>
+      </div>
+      <p class="p" id="rcHint" style="margin-top:10px">Выберите первый день периода</p>
+    </div>
+
     <p class="err" id="dateErr">Дата конца должна быть позже начала.</p>
     <p class="p" style="margin-top:14px;font-family:var(--mono);font-size:12px">
       <span id="daysOut">31</span> дн. в периоде</p>
@@ -270,7 +294,11 @@ body.tg .foot{padding-bottom:calc(24px + env(safe-area-inset-bottom))}
 <section class="screen" data-s="today">
   <div class="bar">
     <div class="side"><span style="font:400 11px var(--mono);color:var(--fg3)" id="dayNo">Дн. 7/31</span></div>
-    <p class="ttl" id="todayDate">7 августа</p>
+    <div class="ttl" style="display:flex;align-items:center;justify-content:center;gap:4px">
+      <button class="txt-btn" id="dPrev" aria-label="Предыдущий день" style="padding:6px;min-height:32px;font-size:16px">‹</button>
+      <span id="todayDate">7 августа</span>
+      <button class="txt-btn" id="dNext" aria-label="Следующий день" style="padding:6px;min-height:32px;font-size:16px">›</button>
+    </div>
     <div class="side r"><button class="txt-btn" data-go="setup">Настр.</button></div>
   </div>
   <div class="body">
@@ -300,6 +328,9 @@ body.tg .foot{padding-bottom:calc(24px + env(safe-area-inset-bottom))}
       <summary>Как считается остаток</summary>
       <p class="p">К вчерашнему остатку каждое утро прибавляется дневной бюджет. Из этой суммы вычитаются траты дня. Что не потрачено — остаётся и переносится дальше.</p>
     </details>
+
+    <p class="p" style="margin-top:16px;font-family:var(--mono);font-size:11.5px;color:var(--fg3)">
+      Осталось до конца периода — <span id="totalLeftOut">0 ₽</span></p>
   </div>
   <div class="nav">
     <button class="navb on" data-go="today"><span>◆</span>Сегодня</button>
@@ -312,7 +343,7 @@ body.tg .foot{padding-bottom:calc(24px + env(safe-area-inset-bottom))}
 <section class="screen" data-s="add">
   <div class="bar">
     <div class="side"><button class="txt-btn" data-go="today">Отмена</button></div>
-    <p class="ttl">Новая трата</p>
+    <p class="ttl" id="addTitle">Новая трата</p>
     <div class="side r"></div>
   </div>
   <div class="body">
