@@ -208,6 +208,23 @@ body.tg .foot{padding-bottom:calc(24px + env(safe-area-inset-bottom))}
   </div>
 </section>
 
+<!-- PERIOD ENDED -->
+<section class="screen" data-s="ended">
+  <div class="bar"></div>
+  <div class="body" style="display:flex;flex-direction:column;justify-content:center">
+    <p class="lbl">Период закончился</p>
+    <p class="p" id="endedRange" style="margin-bottom:18px">1 авг — 31 авг</p>
+    <div class="card" style="padding:22px">
+      <p class="lbl">Остаток на конец периода</p>
+      <p class="num" id="endedBal">0 ₽</p>
+      <p class="p" style="margin-top:14px">Потрачено за период <span id="endedSpent" style="color:var(--fg)">0 ₽</span></p>
+    </div>
+  </div>
+  <div class="foot">
+    <button class="btn" id="startNewPeriod">Начать новый период</button>
+  </div>
+</section>
+
 <!-- SETUP 1 -->
 <section class="screen" data-s="setup">
   <div class="bar">

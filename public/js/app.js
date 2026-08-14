@@ -37,6 +37,7 @@ const S = {
   cache: {},           // period_id -> такая же карта
   today: API.localToday(),
   viewDate: API.localToday(), // какой день сейчас открыт на экране «Сегодня»
+  lastPeriod: null,    // последний завершённый период — для экрана «Период закончился»
   // черновик онбординга и экрана настроек
   income: 0,
   mandatory: [],
@@ -110,8 +111,14 @@ function go(id) {
 }
 
 /* У пользователя с активным периодом «Назад» на первом шаге настроек
-   возвращает в приложение, а не на приветственный экран. */
-const resolveDest = dest => (dest === 'welcome' && S.period ? 'today' : dest);
+   возвращает в приложение. У пользователя, который зашёл продлевать
+   закончившийся период, — на экран итога, а не на рекламный welcome. */
+const resolveDest = dest => {
+  if (dest !== 'welcome') return dest;
+  if (S.period) return 'today';
+  if (S.lastPeriod) return 'ended';
+  return 'welcome';
+};
 
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-go]');
@@ -533,9 +540,17 @@ function prepareOnboarding() {
   renderMand(); checkDates(); paintSave();
 }
 
-/** Экран настроек для существующего периода: подставляем сохранённые значения. */
-function fillSetup(p) {
-  S.start = p.start_date; S.end = p.end_date;
+/** Экран настроек: подставляем доход/расходы/накопления из переданного периода.
+    Даты — либо его собственные (редактирование текущего), либо продолжение
+    сразу после его конца той же длины (продление после завершения). */
+function fillSetup(p, opts) {
+  opts = opts || {};
+  if (opts.continueDates) {
+    S.start = iso(addDays(d(p.end_date), 1));
+    S.end = iso(addDays(d(S.start), daysOf(p) - 1));
+  } else {
+    S.start = p.start_date; S.end = p.end_date;
+  }
   S.income = Number(p.income);
   const fixed = Number(p.fixed_expenses);
   // отдельные статьи расходов в схеме не хранятся — показываем одной строкой
@@ -549,6 +564,7 @@ function fillSetup(p) {
 
 async function enterApp(period) {
   S.period = period;
+  S.lastPeriod = null;
   const r = await API.listTransactions(period.id);
   S.spend = buildSpend(r.transactions);
   S.cache[period.id] = S.spend;
@@ -558,11 +574,31 @@ async function enterApp(period) {
   go('today');
 }
 
+/** Итог периода, в который не попадает сегодняшняя дата — он закончился. */
+function enterEndedScreen(p) {
+  S.period = null;
+  S.lastPeriod = p;
+  const st = d(p.start_date), en = d(p.end_date);
+  $('#endedRange').textContent = `${st.getDate()} ${MS[st.getMonth()]} — ${en.getDate()} ${MS[en.getMonth()]}`;
+  const spent = Number(p.total_spent) || 0;
+  $('#endedBal').textContent = sgn(dailyOf(p) * daysOf(p) - spent);
+  $('#endedSpent').textContent = rub(spent);
+  go('ended');
+}
+$('#startNewPeriod').addEventListener('click', () => {
+  fillSetup(S.lastPeriod, { continueDates: true });
+  go('setup');
+});
+
 async function boot() {
   try {
     const r = await API.init();
     S.user = r.user;
     if (r.period) { await enterApp(r.period); return; }
+
+    const periods = await loadPeriods();
+    if (periods.length) { enterEndedScreen(periods[0]); return; }
+
     prepareOnboarding();
     go('welcome');
   } catch (e) {
