@@ -186,8 +186,13 @@ const routes: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     period: await periodOn(db, user.id, today),
   }),
 
-  /* 3. Создание периода после онбординга.
-        Если период на эти даты уже есть — обновляем его, а не плодим дубликаты. */
+  /* 3. Создание периода после онбординга, либо правка периода из «Настр.»,
+        либо продление после «Период закончился».
+        Если клиент явно называет period_id (правит конкретный период —
+        текущий активный) — обновляем только его, без угадывания по датам.
+        Иначе (первый онбординг или продление disjoint-датами) ищем период,
+        пересекающийся с новым диапазоном, и обновляем его — это на случай
+        повторной отправки тех же дат, не более того. */
   "period/create": async ({ db, user, body }) => {
     const start_date = asDate(body.start_date, "start_date");
     const end_date = asDate(body.end_date, "end_date");
@@ -204,25 +209,52 @@ const routes: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     // daily_budget считает сервер — клиент не может записать произвольное значение
     const free = Math.max(0, income - fixed_expenses - savings);
     const daily_budget = Math.round(free / days);
-
-    const { data: overlap, error: ovErr } = await db
-      .from("periods")
-      .select("id")
-      .eq("user_id", user.id)
-      .lte("start_date", end_date)
-      .gte("end_date", start_date)
-      .order("start_date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (ovErr) throw ovErr;
-
     const values = { start_date, end_date, income, fixed_expenses, daily_budget };
 
-    if (overlap) {
+    let target: Period | null = null;
+    if (body.period_id !== undefined && body.period_id !== null) {
+      target = await ownedPeriod(db, user.id, asId(body.period_id, "period_id"));
+    } else {
+      const { data: overlap, error: ovErr } = await db
+        .from("periods")
+        .select(PERIOD_COLS)
+        .eq("user_id", user.id)
+        .lte("start_date", end_date)
+        .gte("end_date", start_date)
+        .order("start_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (ovErr) throw ovErr;
+      target = (overlap as Period) ?? null;
+    }
+
+    if (target) {
+      // Блокируем только те правки, что НОВОСТЬЮ отрывают траты — то есть
+      // дата была внутри СТАРОГО диапазона периода, а после этой правки
+      // выпадает из НОВОГО. Траты, уже осиротевшие раньше (например, из-за
+      // более ранней правки до этой защиты), при этом не должны блокировать
+      // все последующие сохранения периода намертво.
+      const { data: newlyOrphaned, error: rangeErr } = await db
+        .from("transactions")
+        .select("transaction_date")
+        .eq("period_id", target.id)
+        .gte("transaction_date", target.start_date)
+        .lte("transaction_date", target.end_date)
+        .or(`transaction_date.lt.${start_date},transaction_date.gt.${end_date}`)
+        .order("transaction_date", { ascending: true })
+        .limit(1);
+      if (rangeErr) throw rangeErr;
+      if (newlyOrphaned && newlyOrphaned.length > 0) {
+        throw new BadRequest(
+          `В периоде есть траты за пределами новых дат (например, ${newlyOrphaned[0].transaction_date}). ` +
+            `Сначала удалите их или не сужайте период так сильно.`,
+        );
+      }
+
       const { data, error } = await db
         .from("periods")
         .update(values)
-        .eq("id", overlap.id)
+        .eq("id", target.id)
         .eq("user_id", user.id)
         .select(PERIOD_COLS)
         .single();
@@ -269,12 +301,18 @@ const routes: Record<string, (ctx: Ctx) => Promise<unknown>> = {
 
     const { data: sums, error: sumErr } = await db
       .from("transactions")
-      .select("period_id,amount,type")
+      .select("period_id,amount,type,transaction_date")
       .eq("user_id", user.id);
     if (sumErr) throw sumErr;
 
+    const periodsById = new Map((periods ?? []).map((p: Period) => [p.id, p]));
     const spent = new Map<number, number>();
     for (const t of sums ?? []) {
+      // при переносе дат периода через period/create старые траты могут
+      // остаться привязаны к period_id, но вне нового диапазона дат —
+      // такие в общую сумму периода не считаем
+      const p = periodsById.get(t.period_id);
+      if (!p || t.transaction_date < p.start_date || t.transaction_date > p.end_date) continue;
       const sign = t.type === "income" ? -1 : 1;
       spent.set(t.period_id, (spent.get(t.period_id) ?? 0) + sign * Number(t.amount));
     }

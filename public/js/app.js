@@ -258,7 +258,9 @@ function renderS3() {
 }
 
 /* Завершение онбординга: период создаётся (или обновляется) на сервере,
-   дневной бюджет считает Edge Function. */
+   дневной бюджет считает Edge Function. Если правим уже активный период
+   (зашли через «Настр.») — называем его id явно, чтобы сервер не гадал
+   по пересечению дат и не задел случайно другой период. */
 $('#startPeriod').addEventListener('click', async () => {
   if (!checkDates()) { go('setup'); return; }
   const btn = $('#startPeriod'); btn.disabled = true;
@@ -269,6 +271,7 @@ $('#startPeriod').addEventListener('click', async () => {
       income: S.income,
       fixed_expenses: mandT(),
       savings: S.income * S.savePct / 100,
+      period_id: S.period ? S.period.id : undefined,
     });
     S.periods = []; S.cache = {};
     await enterApp(r.period);
@@ -292,7 +295,13 @@ function renderToday() {
   $('#tmwOut').textContent = rub(avail - sp + daily());
 
   const totalBudget = dailyOf(S.period) * daysOf(S.period);
-  const totalSpent = Object.values(S.spend).reduce((sum, dayList) => sum + dayList.reduce((a, t) => a + t.s, 0), 0);
+  // считаем только дни внутри диапазона периода — при переносе дат через
+  // «Настр.» старые траты могут остаться привязаны к period_id, но вне
+  // нового диапазона, и не должны попадать в общий остаток
+  const totalSpent = Object.entries(S.spend).reduce((sum, [day, dayList]) => {
+    if (day < S.period.start_date || day > S.period.end_date) return sum;
+    return sum + dayList.reduce((a, t) => a + t.s, 0);
+  }, 0);
   $('#totalLeftOut').textContent = rub(totalBudget - totalSpent);
 
   const atStart = d(k) <= d(S.period.start_date), atToday = d(k) >= d(S.today);
